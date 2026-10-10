@@ -233,3 +233,6 @@ async def websocket_stream(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
+  if os.path.isdir("dist"):
+      app.mount("/", StaticFiles(directory="dist", html=True), name="web")
+      
