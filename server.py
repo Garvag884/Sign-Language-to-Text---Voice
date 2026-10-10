@@ -37,6 +37,9 @@ from src.postprocess import SignPostprocessor
 from src.collect import save_sample, get_existing_sample_count
 from src.train import run_training
 
+# When PUBLIC_DEMO=1 (set in the Dockerfile), recording and training are disabled
+PUBLIC_DEMO = os.getenv("PUBLIC_DEMO") == "1"
+
 app = FastAPI(title="SignAI Engine API", version="2.0")
 
 app.add_middleware(
@@ -92,19 +95,24 @@ class TrainPayload(BaseModel):
 
 @app.get("/api/status")
 def get_status():
-    raw_dirs = sorted([d.name for d in Path("data/raw").iterdir() if d.is_dir()])
-    class_counts = {d: get_existing_sample_count(Path("data/raw") / d) for d in raw_dirs}
+    raw_root = Path("data/raw")
+    raw_dirs = sorted([d.name for d in raw_root.iterdir() if d.is_dir()]) if raw_root.exists() else []
+    class_counts = {d: get_existing_sample_count(raw_root / d) for d in raw_dirs}
     return {
         "vocabulary": engine.vocab,
         "model_type": engine.model_type,
         "classes_count": class_counts,
         "sequence_length": engine.cfg["sequence"]["sequence_length"],
         "confidence_threshold": engine.cfg["inference"].get("confidence_threshold", 0.70),
+        "public_demo": PUBLIC_DEMO,
     }
 
 
 @app.post("/api/record")
 def record_sequence(payload: RecordPayload):
+    if PUBLIC_DEMO:
+        raise HTTPException(status_code=403, detail="Recording is disabled in the public demo")
+
     label_clean = payload.label.strip().replace(" ", "_")
     if not label_clean:
         raise HTTPException(status_code=400, detail="Invalid label")
@@ -132,6 +140,9 @@ def record_sequence(payload: RecordPayload):
 
 @app.post("/api/train")
 def train_model(payload: TrainPayload):
+    if PUBLIC_DEMO:
+        raise HTTPException(status_code=403, detail="Training is disabled in the public demo")
+
     raw_dirs = sorted([d.name for d in Path("data/raw").iterdir() if d.is_dir()])
     with open("config/labels.yaml", "r") as f:
         cfg = yaml.safe_load(f)
@@ -233,6 +244,8 @@ async def websocket_stream(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
-  if os.path.isdir("dist"):
-      app.mount("/", StaticFiles(directory="dist", html=True), name="web")
-      
+
+
+# Serve the built React frontend (must stay LAST, after all API/WebSocket routes)
+if os.path.isdir("dist"):
+    app.mount("/", StaticFiles(directory="dist", html=True), name="web")
